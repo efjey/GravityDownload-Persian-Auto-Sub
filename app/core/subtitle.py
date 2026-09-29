@@ -88,222 +88,98 @@ def format_timestamp(
 # BiDi Protection
 # ============================================================
 
-def protect_rtl_text(
-    text
-):
+# Unicode Bidirectional Isolation characters.
+# LRI/PDI isolate English words, model names and numbers from
+# surrounding Persian text without changing the actual text.
+LRI = "\u2066"
+PDI = "\u2069"
+RLM = "\u200f"
+
+# Directional controls that may have been inserted by older
+# versions of the application.
+_DIRECTIONAL_CONTROLS = str.maketrans("", "", "\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def protect_rtl_text(text):
     """
-    Improve display of Persian/Arabic text containing
-    English words, numbers and technical terms.
+    Make mixed Persian/English subtitle lines render correctly.
 
-    Example:
+    The text itself is not translated or reordered. LTR runs such as
+    "DaVinci Resolve", "RTX 4060", "Windows 11", "Python 3" and
+    "4K" are isolated with Unicode LRI/PDI controls. An RLM at the
+    start of an RTL line gives players a strong RTL paragraph cue.
 
-        در DaVinci Resolve کار می‌کنیم
-
-    gets Unicode directional markers around LTR runs
-    so media players are less likely to reorder them.
+    This is preferable to wrapping the whole line with RLM, which can
+    cause punctuation and embedded English words to visually jump.
     """
-
     if not text:
         return ""
 
-    text = str(
-        text
-    )
-
-    # --------------------------------------------------------
-    # Normalize invisible direction characters first
-    # --------------------------------------------------------
-
-    text = text.replace(
-        "\u200e",
-        ""
-    )
-
-    text = text.replace(
-        "\u200f",
-        ""
-    )
-
-    text = text.replace(
-        "\u202a",
-        ""
-    )
-
-    text = text.replace(
-        "\u202b",
-        ""
-    )
-
-    text = text.replace(
-        "\u202c",
-        ""
-    )
-
-    text = text.replace(
-        "\u202d",
-        ""
-    )
-
-    text = text.replace(
-        "\u202e",
-        ""
-    )
-
-    # --------------------------------------------------------
-    # Process each line separately
-    # --------------------------------------------------------
-
-    lines = text.split(
-        "\n"
-    )
-
-    processed_lines = []
-
-    for line in lines:
-
-        processed_lines.append(
-            _protect_rtl_line(
-                line
-            )
-        )
+    text = str(text).translate(_DIRECTIONAL_CONTROLS)
 
     return "\n".join(
-        processed_lines
+        _protect_rtl_line(line)
+        for line in text.split("\n")
     )
 
 
-def _protect_rtl_line(
-    line
-):
-    """
-    Protect LTR sequences inside RTL Persian text.
-    """
-
+def _protect_rtl_line(line):
     if not line:
         return line
 
-    # --------------------------------------------------------
-    # Detect Latin / numeric runs.
-    #
-    # Examples:
-    #   DaVinci
-    #   Resolve
-    #   RTX 4060
-    #   Python
-    #   v19.2
-    #   4K
-    #   MP4
-    # --------------------------------------------------------
+    if not _contains_rtl(line):
+        return line
 
+    # Match Latin/numeric runs, including common technical notation.
+    # A whole English phrase is kept together instead of isolating each
+    # word independently, which improves punctuation and readability.
     pattern = re.compile(
         r"""
+        (?<![A-Za-z0-9])
         (?:
-            [A-Za-z]
-            [A-Za-z0-9_.+\-/#:@]*
-
-            (?:
-                \s+
-                [A-Za-z0-9_.+\-/#:@]+
-            )*
+            [A-Za-z0-9]
+            [A-Za-z0-9_.+\-/#:@%]*
         )
+        (?:
+            \s+
+            [A-Za-z0-9]
+            [A-Za-z0-9_.+\-/#:@%]*
+        ){0,12}
+        (?![A-Za-z0-9])
         """,
         re.VERBOSE,
     )
 
     result = []
-
     last_end = 0
+    found_ltr = False
 
-    for match in pattern.finditer(
-        line
-    ):
+    for match in pattern.finditer(line):
+        value = match.group(0)
 
-        start = match.start()
-        end = match.end()
-
-        # ----------------------------------------------------
-        # Avoid wrapping ordinary numbers that are already
-        # inside a Persian word structure.
-        # ----------------------------------------------------
-
-        value = match.group(
-            0
-        )
-
-        # Skip if empty
-        if not value:
+        if not value.strip():
             continue
 
-        # ----------------------------------------------------
-        # Text before LTR segment
-        # ----------------------------------------------------
+        found_ltr = True
+        result.append(line[last_end:match.start()])
+        result.append(LRI)
+        result.append(value)
+        result.append(PDI)
+        last_end = match.end()
 
-        result.append(
-            line[
-                last_end:start
-            ]
-        )
+    result.append(line[last_end:])
+    final_text = "".join(result)
 
-        # ----------------------------------------------------
-        # Add LTR markers
-        # ----------------------------------------------------
+    # Only add a paragraph-direction hint at the beginning. Do not put
+    # RLM at both ends because trailing punctuation can then jump sides.
+    if found_ltr:
+        return RLM + final_text
 
-        result.append(
-            LRM
-        )
-
-        result.append(
-            value
-        )
-
-        result.append(
-            LRM
-        )
-
-        last_end = end
-
-    result.append(
-        line[
-            last_end:
-        ]
-    )
-
-    final_text = "".join(
-        result
-    )
-
-    # --------------------------------------------------------
-    # Add RLM around complete RTL subtitle line.
-    #
-    # This helps some players determine that the subtitle
-    # should primarily be rendered RTL.
-    # --------------------------------------------------------
-
-    if _contains_rtl(final_text):
-
-        final_text = (
-            RLM
-            + final_text
-            + RLM
-        )
-
-    return final_text
+    return RLM + final_text
 
 
-def _contains_rtl(
-    text
-):
-    """
-    Check whether text contains Persian/Arabic RTL
-    characters.
-    """
-
-    return bool(
-        re.search(
-            r"[\u0590-\u08FF]",
-            text
-        )
-    )
+def _contains_rtl(text):
+    return bool(re.search(r"[\u0590-\u08FF]", text))
 
 
 # ============================================================

@@ -45,10 +45,6 @@ from app.utils.config import (
     LOGS_DIR,
 )
 
-from app.utils.ffmpeg import (
-    FFmpegManager,
-)
-
 from app.utils.logger import (
     setup_logger,
     create_qt_log_handler,
@@ -1332,28 +1328,8 @@ class MainWindow(QMainWindow):
 
             return
 
-        # ----------------------------------------------------
-        # FFmpeg Check
-        # ----------------------------------------------------
-
-        ffmpeg = FFmpegManager()
-
-        if not ffmpeg.is_available():
-
-            QMessageBox.critical(
-                self,
-                "FFmpeg پیدا نشد",
-                "FFmpeg پیدا نشد.\n\n"
-                "ffmpeg.exe را داخل پوشه ffmpeg پروژه قرار دهید "
-                "یا FFmpeg را به PATH ویندوز اضافه کنید."
-            )
-
-            self.logger.error(
-                "FFmpeg پیدا نشد."
-            )
-
-            return
-
+        # Audio is decoded directly by faster-whisper/PyAV.
+        # No separate FFmpeg installation is required for processing.
         # ----------------------------------------------------
         # Log
         # ----------------------------------------------------
