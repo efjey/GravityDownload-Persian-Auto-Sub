@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
+
 
 from app.core.transcriber import (
     Transcriber,
@@ -11,26 +12,18 @@ from app.core.translator import (
     TranslationError,
 )
 
-from app.core.subtitle import (
-    write_srt,
-)
+from app.core.subtitle import write_srt
 
-from app.utils.config import (
-    SUPPORTED_LANGUAGES,
-)
+from app.utils.config import SUPPORTED_LANGUAGES
 
 
 class ProcessingError(Exception):
-    """
-    خطای عمومی پردازش ویدیو.
-    """
+    """خطای عمومی پردازش ویدیو."""
     pass
 
 
 class ProcessingStopped(Exception):
-    """
-    پردازش توسط کاربر متوقف شده است.
-    """
+    """پردازش توسط کاربر متوقف شده است."""
     pass
 
 
@@ -43,151 +36,79 @@ class VideoProcessor:
         whisper_model: str = "small",
         source_language: Optional[str] = None,
         target_language: str = "fa",
-        batch_size: int = 60,
-        max_workers: int = 3,
+        batch_size: int = 80,
+        max_workers: int = 4,
     ):
-
         self.api_key = api_key
+        self.openai_model = openai_model or "gpt-5-mini"
+        self.whisper_model = whisper_model or "small"
+        self.source_language = source_language
+        self.target_language = target_language or "fa"
 
-        self.openai_model = (
-            openai_model
-            or "gpt-5-mini"
-        )
+        self.batch_size = max(1, int(batch_size))
+        self.max_workers = max(1, int(max_workers))
 
-        self.whisper_model = (
-            whisper_model
-            or "small"
-        )
-
-        self.source_language = (
-            source_language
-        )
-
-        self.target_language = (
-            target_language
-            or "fa"
-        )
-
-        self.batch_size = max(
-            1,
-            int(batch_size)
-        )
-
-        self.max_workers = max(
-            1,
-            int(max_workers)
-        )
-
-        # ----------------------------------------------------
-        # Whisper
-        # ----------------------------------------------------
-
+        # faster-whisper can decode the video's audio stream directly.
+        # No intermediate WAV file is created.
         self.transcriber = Transcriber(
             model_size=self.whisper_model
         )
-
-        # ----------------------------------------------------
-        # Translator
-        # ----------------------------------------------------
 
         self.translator = Translator(
             api_key=self.api_key,
             model=self.openai_model,
         )
 
-    # ========================================================
-    # Helpers
-    # ========================================================
-
     @staticmethod
-    def _emit_log(
-        callback,
-        message: str,
-    ):
-
-        if callback is not None:
-
-            try:
-                callback(
-                    str(message)
-                )
-
-            except Exception:
-                pass
-
-    @staticmethod
-    def _emit_progress(
-        callback,
-        value: int,
-    ):
-
+    def _emit_log(callback, message: str):
         if callback is None:
             return
-
-        value = max(
-            0,
-            min(
-                100,
-                int(value)
-            )
-        )
-
         try:
-            callback(value)
-
+            callback(str(message))
         except Exception:
             pass
 
     @staticmethod
-    def _check_stop(
-        stop_checker
-    ):
+    def _emit_progress(callback, value: int):
+        if callback is None:
+            return
 
+        value = max(0, min(100, int(value)))
+
+        try:
+            callback(value)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _check_stop(stop_checker):
         if stop_checker is None:
             return
 
         try:
-
             if stop_checker():
-
                 raise ProcessingStopped(
                     "پردازش توسط کاربر متوقف شد."
                 )
-
         except ProcessingStopped:
-
             raise
-
         except Exception:
             pass
 
-    # ========================================================
-    # Language
-    # ========================================================
-
     @staticmethod
-    def _normalize_source_language(
-        language
-    ):
+    def _normalize_source_language(language):
+        if not language:
+            return None
+
+        language = str(language).strip()
 
         if not language:
             return None
 
-        language = str(
-            language
-        ).strip()
-
-        if not language:
-            return None
-
-        # اگر قبلاً کد زبان است
         if len(language) <= 5:
             return language.lower()
 
-        # اگر نام زبان از UI آمده باشد
-        code = SUPPORTED_LANGUAGES.get(
-            language
-        )
+        code = SUPPORTED_LANGUAGES.get(language)
 
         if code:
             return code
@@ -195,66 +116,31 @@ class VideoProcessor:
         return language
 
     @staticmethod
-    def _normalize_target_language(
-        language
-    ):
-
+    def _normalize_target_language(language):
         if not language:
             return "fa"
 
-        language = str(
-            language
-        ).strip()
+        language = str(language).strip()
 
-        # اگر کد زبان است
         if len(language) <= 5:
-
             return language.lower()
 
-        # اگر نام زبان از UI آمده باشد
-        code = SUPPORTED_LANGUAGES.get(
-            language
-        )
+        code = SUPPORTED_LANGUAGES.get(language)
 
         if code:
             return code
 
         return language
 
-    # ========================================================
-    # Progress
-    # ========================================================
-
     @staticmethod
-    def _stage_progress(
-        stage_start,
-        stage_end,
-        stage_value,
-    ):
-
-        stage_value = max(
-            0,
-            min(
-                100,
-                stage_value
-            )
-        )
+    def _stage_progress(stage_start, stage_end, stage_value):
+        stage_value = max(0, min(100, stage_value))
 
         return int(
             stage_start
-            + (
-                stage_value
-                / 100
-            )
-            * (
-                stage_end
-                - stage_start
-            )
+            + (stage_value / 100)
+            * (stage_end - stage_start)
         )
-
-    # ========================================================
-    # Process Video
-    # ========================================================
 
     def process_video(
         self,
@@ -263,57 +149,36 @@ class VideoProcessor:
         log_callback=None,
         stop_checker=None,
     ):
-
-        video_path = Path(
-            video_path
-        )
+        video_path = Path(video_path)
 
         if not video_path.exists():
-
             raise ProcessingError(
                 f"فایل ویدیو پیدا نشد: {video_path}"
             )
 
         if not video_path.is_file():
-
             raise ProcessingError(
                 f"مسیر واردشده فایل نیست: {video_path}"
             )
 
-        subtitle_path = (
-            video_path.with_suffix(
-                ".srt"
-            )
-        )
+        subtitle_path = video_path.with_suffix(".srt")
 
         try:
+            self._check_stop(stop_checker)
 
-            # ------------------------------------------------
-            # Start
-            # ------------------------------------------------
-
-            self._check_stop(
-                stop_checker
-            )
-
-            self._emit_progress(
-                progress_callback,
-                0
-            )
+            self._emit_progress(progress_callback, 0)
 
             self._emit_log(
                 log_callback,
-                f"شروع پردازش: {video_path.name}"
+                f"شروع پردازش: {video_path.name}",
             )
-
             self._emit_log(
                 log_callback,
-                f"Whisper: {self.whisper_model}"
+                f"Whisper: {self.whisper_model}",
             )
-
             self._emit_log(
                 log_callback,
-                f"OpenAI: {self.openai_model}"
+                f"OpenAI: {self.openai_model}",
             )
 
             # ------------------------------------------------
@@ -321,68 +186,131 @@ class VideoProcessor:
             # ------------------------------------------------
 
             if subtitle_path.exists():
-
                 self._emit_log(
                     log_callback,
                     f"⚠ زیرنویس از قبل وجود دارد: "
-                    f"{subtitle_path.name}"
+                    f"{subtitle_path.name}",
                 )
-
                 self._emit_log(
                     log_callback,
-                    "برای جلوگیری از بازنویسی، "
-                    "این فایل رد شد."
+                    "برای جلوگیری از بازنویسی، این فایل رد شد.",
                 )
-
-                self._emit_progress(
-                    progress_callback,
-                    100
-                )
-
+                self._emit_progress(progress_callback, 100)
                 return subtitle_path
 
             # ------------------------------------------------
             # Whisper
             # ------------------------------------------------
 
-            self._check_stop(
-                stop_checker
+            self._check_stop(stop_checker)
+
+            source_language = self._normalize_source_language(
+                self.source_language
             )
+
+            if source_language:
+                self._emit_log(
+                    log_callback,
+                    f"🎙️ تشخیص گفتار (زبان: {source_language})...",
+                )
+            else:
+                self._emit_log(
+                    log_callback,
+                    "🎙️ تشخیص گفتار (تشخیص خودکار زبان)...",
+                )
+
+            self._emit_progress(progress_callback, 5)
+
+            try:
+                transcription = self.transcriber.transcribe(
+                    video_path,
+                    language=source_language,
+                )
+            except TranscriptionError as exc:
+                raise ProcessingError(
+                    f"خطا در Whisper: {exc}"
+                ) from exc
+            except Exception as exc:
+                raise ProcessingError(
+                    f"خطای تشخیص گفتار: {exc}"
+                ) from exc
+
+            self._check_stop(stop_checker)
+
+            if not isinstance(transcription, dict):
+                raise ProcessingError(
+                    "خروجی Whisper ساختار معتبری ندارد."
+                )
+
+            segments = transcription.get("segments", [])
+
+            detected_language = transcription.get("language")
+            language_probability = transcription.get(
+                "language_probability"
+            )
+            using_gpu = transcription.get("using_gpu")
+
+            if not segments:
+                raise ProcessingError(
+                    "Whisper هیچ گفتاری در ویدیو پیدا نکرد."
+                )
+
+            self._emit_progress(progress_callback, 50)
+
+            self._emit_log(
+                log_callback,
+                f"✓ Whisper: {len(segments)} بخش گفتاری پیدا شد.",
+            )
+
+            if detected_language:
+                if language_probability is not None:
+                    self._emit_log(
+                        log_callback,
+                        "زبان تشخیص‌داده‌شده: "
+                        f"{detected_language} "
+                        f"({language_probability:.1%})",
+                    )
+                else:
+                    self._emit_log(
+                        log_callback,
+                        f"زبان تشخیص‌داده‌شده: {detected_language}",
+                    )
+
+            if using_gpu:
+                self._emit_log(
+                    log_callback,
+                    "⚡ Whisper با GPU اجرا شد.",
+                )
+            else:
+                self._emit_log(
+                    log_callback,
+                    "Whisper با CPU اجرا شد.",
+                )
 
             # ------------------------------------------------
             # Translation
             # ------------------------------------------------
 
-            self._check_stop(
-                stop_checker
-            )
+            self._check_stop(stop_checker)
 
-            target_language = (
-                self._normalize_target_language(
-                    self.target_language
-                )
+            target_language = self._normalize_target_language(
+                self.target_language
             )
 
             self._emit_log(
                 log_callback,
-                f"🌐 ترجمه {len(segments)} بخش "
-                f"به {target_language}..."
+                f"🌐 ترجمه {len(segments)} بخش به "
+                f"{target_language}...",
             )
 
-            self._emit_progress(
-                progress_callback,
-                55
-            )
+            self._emit_progress(progress_callback, 55)
 
             def translation_progress(
                 completed_batches,
                 total_batches,
                 translated_segments,
             ):
-
-                self._check_stop(
-                    stop_checker
-                )
+                self._check_stop(stop_checker)
 
                 if total_batches <= 0:
                     value = 100
@@ -390,159 +318,109 @@ class VideoProcessor:
                     value = (
                         completed_batches
                         / total_batches
-                    ) * 100
-
-                overall = (
-                    self._stage_progress(
-                        55,
-                        92,
-                        value
+                        * 100
                     )
+
+                overall = self._stage_progress(
+                    55,
+                    92,
+                    value,
                 )
 
                 self._emit_progress(
                     progress_callback,
-                    overall
+                    overall,
                 )
 
             def translation_stop_checker():
-
                 if stop_checker is None:
                     return False
 
                 try:
-                    return bool(
-                        stop_checker()
-                    )
-
+                    return bool(stop_checker())
                 except Exception:
                     return False
 
             try:
-
                 translated_segments = (
                     self.translator.translate_batch(
                         segments=segments,
                         batch_size=self.batch_size,
                         max_workers=self.max_workers,
-                        progress_callback=(
-                            translation_progress
-                        ),
-                        stop_callback=(
-                            translation_stop_checker
-                        ),
+                        progress_callback=translation_progress,
+                        stop_callback=translation_stop_checker,
                     )
                 )
-
             except TranslationError as exc:
-
                 raise ProcessingError(
                     f"خطا در ترجمه: {exc}"
                 ) from exc
-
             except Exception as exc:
-
                 raise ProcessingError(
                     f"خطای ترجمه: {exc}"
                 ) from exc
 
-            self._check_stop(
-                stop_checker
-            )
+            self._check_stop(stop_checker)
 
             if not translated_segments:
-
                 raise ProcessingError(
                     "ترجمه‌ای دریافت نشد."
                 )
 
-            if len(translated_segments) != len(
-                segments
-            ):
-
+            if len(translated_segments) != len(segments):
                 raise ProcessingError(
-                    "تعداد بخش‌های ترجمه‌شده "
-                    "با بخش‌های اصلی برابر نیست."
+                    "تعداد بخش‌های ترجمه‌شده با بخش‌های اصلی برابر نیست."
                 )
 
-            self._emit_progress(
-                progress_callback,
-                92
-            )
-
-            self._emit_log(
-                log_callback,
-                "✓ ترجمه تمام شد."
-            )
+            self._emit_progress(progress_callback, 92)
+            self._emit_log(log_callback, "✓ ترجمه تمام شد.")
 
             # ------------------------------------------------
             # SRT
             # ------------------------------------------------
 
-            self._check_stop(
-                stop_checker
-            )
+            self._check_stop(stop_checker)
 
             self._emit_log(
                 log_callback,
-                "📝 ساخت فایل SRT..."
+                "📝 ساخت فایل SRT...",
             )
 
-            self._emit_progress(
-                progress_callback,
-                95
-            )
+            self._emit_progress(progress_callback, 95)
 
             try:
-
                 write_srt(
                     translated_segments,
                     subtitle_path,
+                    protect_rtl=True,
                 )
-
             except Exception as exc:
-
                 raise ProcessingError(
                     f"خطا در ساخت SRT: {exc}"
                 ) from exc
 
-            self._check_stop(
-                stop_checker
-            )
+            self._check_stop(stop_checker)
 
-            self._emit_progress(
-                progress_callback,
-                100
-            )
+            self._emit_progress(progress_callback, 100)
 
             self._emit_log(
                 log_callback,
-                f"✓ زیرنویس ساخته شد: "
-                f"{subtitle_path.name}"
+                f"✓ زیرنویس ساخته شد: {subtitle_path.name}",
             )
 
             return subtitle_path
 
         except ProcessingStopped:
-
             self._emit_log(
                 log_callback,
-                "⏹ پردازش این ویدیو متوقف شد."
+                "⏹ پردازش این ویدیو متوقف شد.",
             )
-
             raise
 
         except ProcessingError:
-
             raise
 
         except Exception as exc:
-
             raise ProcessingError(
                 f"خطای پردازش ویدیو: {exc}"
             ) from exc
-
-        finally:
-
-            # No temporary audio file is created anymore.
-            pass
