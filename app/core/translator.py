@@ -34,8 +34,8 @@ class Translator:
     - امکان توقف
     """
 
-    DEFAULT_BATCH_SIZE = 60
-    DEFAULT_MAX_WORKERS = 3
+    DEFAULT_BATCH_SIZE = 80
+    DEFAULT_MAX_WORKERS = 4
 
     MAX_RETRIES = 3
     RETRY_DELAYS = (2, 5, 10)
