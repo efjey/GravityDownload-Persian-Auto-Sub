@@ -519,9 +519,12 @@ class Transcriber:
                     self.model.transcribe(
                         str(audio_path),
                         language=language_code,
-                        beam_size=5,
+                        # Speed-oriented settings for subtitle generation.
+                        # A smaller beam is substantially faster while
+                        # retaining good subtitle accuracy.
+                        beam_size=3,
                         vad_filter=True,
-                        condition_on_previous_text=True,
+                        condition_on_previous_text=False,
                         word_timestamps=False,
                     )
                 )
