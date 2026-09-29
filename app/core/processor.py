@@ -15,11 +15,6 @@ from app.core.subtitle import (
     write_srt,
 )
 
-from app.utils.ffmpeg import (
-    FFmpegManager,
-    FFmpegError,
-)
-
 from app.utils.config import (
     SUPPORTED_LANGUAGES,
 )
@@ -82,12 +77,6 @@ class VideoProcessor:
             1,
             int(max_workers)
         )
-
-        # ----------------------------------------------------
-        # FFmpeg
-        # ----------------------------------------------------
-
-        self.ffmpeg = FFmpegManager()
 
         # ----------------------------------------------------
         # Whisper
@@ -297,12 +286,6 @@ class VideoProcessor:
             )
         )
 
-        audio_path = (
-            video_path.with_name(
-                f".{video_path.stem}_gravitydownload_audio.wav"
-            )
-        )
-
         try:
 
             # ------------------------------------------------
@@ -359,191 +342,12 @@ class VideoProcessor:
                 return subtitle_path
 
             # ------------------------------------------------
-            # FFmpeg
-            # ------------------------------------------------
-
-            self._check_stop(
-                stop_checker
-            )
-
-            self._emit_log(
-                log_callback,
-                "🎵 استخراج صدا با FFmpeg..."
-            )
-
-            self._emit_progress(
-                progress_callback,
-                5
-            )
-
-            try:
-
-                self.ffmpeg.extract_audio(
-                    video_path,
-                    audio_path,
-                )
-
-            except FFmpegError as exc:
-
-                raise ProcessingError(
-                    f"خطا در استخراج صدا: {exc}"
-                ) from exc
-
-            self._emit_progress(
-                progress_callback,
-                25
-            )
-
-            self._emit_log(
-                log_callback,
-                "✓ استخراج صدا انجام شد."
-            )
-
-            # ------------------------------------------------
             # Whisper
             # ------------------------------------------------
 
             self._check_stop(
                 stop_checker
             )
-
-            source_language = (
-                self._normalize_source_language(
-                    self.source_language
-                )
-            )
-
-            if source_language:
-
-                self._emit_log(
-                    log_callback,
-                    f"🎙️ تشخیص گفتار "
-                    f"(زبان: {source_language})..."
-                )
-
-            else:
-
-                self._emit_log(
-                    log_callback,
-                    "🎙️ تشخیص گفتار "
-                    "(تشخیص خودکار زبان)..."
-                )
-
-            self._emit_progress(
-                progress_callback,
-                30
-            )
-
-            try:
-
-                transcription = (
-                    self.transcriber.transcribe(
-                        audio_path,
-                        language=source_language,
-                    )
-                )
-
-            except TranscriptionError as exc:
-
-                raise ProcessingError(
-                    f"خطا در Whisper: {exc}"
-                ) from exc
-
-            except Exception as exc:
-
-                raise ProcessingError(
-                    f"خطای تشخیص گفتار: {exc}"
-                ) from exc
-
-            self._check_stop(
-                stop_checker
-            )
-
-            if not isinstance(
-                transcription,
-                dict
-            ):
-
-                raise ProcessingError(
-                    "خروجی Whisper ساختار معتبری ندارد."
-                )
-
-            segments = (
-                transcription.get(
-                    "segments",
-                    []
-                )
-            )
-
-            detected_language = (
-                transcription.get(
-                    "language"
-                )
-            )
-
-            language_probability = (
-                transcription.get(
-                    "language_probability"
-                )
-            )
-
-            using_gpu = (
-                transcription.get(
-                    "using_gpu"
-                )
-            )
-
-            if not segments:
-
-                raise ProcessingError(
-                    "Whisper هیچ گفتاری در ویدیو پیدا نکرد."
-                )
-
-            self._emit_progress(
-                progress_callback,
-                50
-            )
-
-            self._emit_log(
-                log_callback,
-                f"✓ Whisper: "
-                f"{len(segments)} بخش گفتاری پیدا شد."
-            )
-
-            if detected_language:
-
-                if language_probability is not None:
-
-                    self._emit_log(
-                        log_callback,
-                        "زبان تشخیص‌داده‌شده: "
-                        f"{detected_language} "
-                        f"("
-                        f"{language_probability:.1%}"
-                        f")"
-                    )
-
-                else:
-
-                    self._emit_log(
-                        log_callback,
-                        f"زبان تشخیص‌داده‌شده: "
-                        f"{detected_language}"
-                    )
-
-            if using_gpu:
-
-                self._emit_log(
-                    log_callback,
-                    "⚡ Whisper با GPU اجرا شد."
-                )
-
-            else:
-
-                self._emit_log(
-                    log_callback,
-                    "Whisper با CPU اجرا شد."
-                )
 
             # ------------------------------------------------
             # Translation
@@ -571,12 +375,22 @@ class VideoProcessor:
             )
 
             def translation_progress(
-                value
+                completed_batches,
+                total_batches,
+                translated_segments,
             ):
 
                 self._check_stop(
                     stop_checker
                 )
+
+                if total_batches <= 0:
+                    value = 100
+                else:
+                    value = (
+                        completed_batches
+                        / total_batches
+                    ) * 100
 
                 overall = (
                     self._stage_progress(
@@ -730,24 +544,5 @@ class VideoProcessor:
 
         finally:
 
-            # ------------------------------------------------
-            # Temporary audio cleanup
-            # ------------------------------------------------
-
-            try:
-
-                if audio_path.exists():
-
-                    audio_path.unlink()
-
-                    self._emit_log(
-                        log_callback,
-                        "فایل موقت صوتی حذف شد."
-                    )
-
-            except Exception as exc:
-
-                self._emit_log(
-                    log_callback,
-                    f"⚠ حذف فایل موقت ناموفق بود: {exc}"
-                )
+            # No temporary audio file is created anymore.
+            pass
